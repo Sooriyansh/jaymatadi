@@ -34,16 +34,10 @@
       touch-action: none;
       transform-origin: top left;
     }
-    #cutout.dragging {
-      cursor: grabbing;
-    }
-    .controls {
-      margin-top: 20px;
-      text-align: center;
-    }
-    input[type="file"] {
-      margin-bottom: 10px;
-    }
+    #cutout.dragging { cursor: grabbing; }
+
+    .controls { margin-top: 20px; text-align: center; }
+    input[type="file"] { margin-bottom: 10px; }
     button {
       background: #c0392b;
       border: none;
@@ -54,16 +48,36 @@
       font-weight: bold;
       margin: 5px;
     }
+
+    /* Loading spinner */
+    .spinner {
+      border: 6px solid #eee;
+      border-top: 6px solid #c0392b;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      animation: spin 1s linear infinite;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: none;
+      z-index: 100;
+    }
+    @keyframes spin { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
   </style>
 </head>
 <body>
   <h2>अपनी फोटो अपलोड करें, move करें और size adjust करें</h2>
+
   <div class="controls">
-    <input type="file" id="upload" accept="image/*">
-    <br>
+    <input type="file" id="upload" accept="image/*"><br>
+    <button id="setBtn" disabled>Set Position</button>
     <button id="downloadBtn" disabled>Download</button>
   </div>
+
   <div class="stage" id="stage">
+    <div class="spinner" id="spinner"></div>
     <img id="cutout" draggable="false" />
   </div>
 
@@ -72,17 +86,23 @@
     const upload = document.getElementById("upload");
     const cutout = document.getElementById("cutout");
     const stage = document.getElementById("stage");
+    const spinner = document.getElementById("spinner");
+    const setBtn = document.getElementById("setBtn");
     const downloadBtn = document.getElementById("downloadBtn");
 
     let isDragging = false;
     let offsetX = 0, offsetY = 0;
-    let scale = 1; // default zoom
-    let lastDist = null; // pinch distance
+    let scale = 1;
+    let lastDist = null;
+    let finalData = null; // save final position+scale
 
-    // Upload & remove.bg
+    // Upload with loading
     upload.addEventListener("change", async (e) => {
       const file = e.target.files[0];
       if (!file) return;
+
+      spinner.style.display = "block"; // show loading
+
       try {
         const fd = new FormData();
         fd.append("image_file", file);
@@ -105,10 +125,12 @@
         cutout.style.top = "40px";
         cutout.style.transform = `scale(${scale})`;
 
-        downloadBtn.disabled = false;
+        setBtn.disabled = false;
       } catch (err) {
         console.error(err);
         alert("Background remove नहीं हो सका। Console देखें।");
+      } finally {
+        spinner.style.display = "none"; // hide loading
       }
     });
 
@@ -130,9 +152,6 @@
       let x = e.clientX - stageRect.left - offsetX;
       let y = e.clientY - stageRect.top - offsetY;
 
-      x = Math.max(0, Math.min(x, stageRect.width - cutout.offsetWidth * scale));
-      y = Math.max(0, Math.min(y, stageRect.height - cutout.offsetHeight * scale));
-
       cutout.style.left = x + "px";
       cutout.style.top = y + "px";
     });
@@ -142,16 +161,16 @@
       cutout.classList.remove("dragging");
     });
 
-    // Resize (mouse wheel)
+    // Resize (wheel)
     stage.addEventListener("wheel", (e) => {
       if (cutout.style.display === "none") return;
       e.preventDefault();
       scale += e.deltaY * -0.001;
-      scale = Math.min(Math.max(0.2, scale), 3); // limit zoom
+      scale = Math.min(Math.max(0.2, scale), 3);
       cutout.style.transform = `scale(${scale})`;
     });
 
-    // Pinch zoom (touch)
+    // Pinch zoom
     stage.addEventListener("touchmove", (e) => {
       if (e.touches.length === 2) {
         e.preventDefault();
@@ -168,13 +187,21 @@
         lastDist = dist;
       }
     });
+    stage.addEventListener("touchend", () => { lastDist = null; });
 
-    stage.addEventListener("touchend", () => {
-      lastDist = null;
+    // Set position (finalize)
+    setBtn.addEventListener("click", () => {
+      const x = parseInt(cutout.style.left) || 0;
+      const y = parseInt(cutout.style.top) || 0;
+      finalData = { x, y, scale, src: cutout.src };
+      downloadBtn.disabled = false;
+      alert("Image position set हो गई ✅ अब Download कर सकते हो।");
     });
 
-    // Download composition
+    // Download with finalData
     downloadBtn.addEventListener("click", async () => {
+      if (!finalData) { alert("पहले Set Position क्लिक करें"); return; }
+
       const stageRect = stage.getBoundingClientRect();
       const canvas = document.createElement("canvas");
       canvas.width = stageRect.width;
@@ -188,19 +215,15 @@
       ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
 
       // Cutout
-      if (cutout.src) {
-        const img = new Image();
-        img.src = cutout.src;
-        await new Promise(res => { img.onload = res; });
+      const img = new Image();
+      img.src = finalData.src;
+      await new Promise(res => { img.onload = res; });
 
-        const x = parseInt(cutout.style.left);
-        const y = parseInt(cutout.style.top);
-        const w = img.width * scale;
-        const h = img.height * scale;
+      const w = img.width * finalData.scale;
+      const h = img.height * finalData.scale;
+      ctx.drawImage(img, finalData.x, finalData.y, w, h);
 
-        ctx.drawImage(img, x, y, w, h);
-      }
-
+      // Save
       const link = document.createElement("a");
       link.download = "pandal_composition.png";
       link.href = canvas.toDataURL("image/png");
